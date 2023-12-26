@@ -1,0 +1,292 @@
+---
+title: "Inflation Time Series Analysis"
+author: "Mustafa Evci"
+date: "2023-12-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(TSA)
+library(ggplot2)
+library(forecast)
+library(fpp2)
+library(tseries)
+library(gridExtra)
+library(pdR)
+library(tidyverse)
+library(tibbletime)
+library(timetk)
+library(magrittr)
+library(tsibble)
+library(dplyr)
+library(fUnitRoots)
+library(xts)
+library(plotly)
+library(stats)
+library(caschrono)
+library(png)
+```
+
+### 1. Introduction covering data descripition, aim and the source of data.
+
+```{r}
+data <- read.csv("/Users/mithatevci/Stat 4.Sınıf/Stat497/497-PROJECT/UIGFULL.csv")
+
+
+class(data)
+head(data)
+summary(data)
+
+data$DATE <- as.Date(data$DATE)
+data_ts <- ts(data$UIGFULL, data$DATE,frequency = 12)
+```
+
+### 2. Time series plot and interpretation (Visually determine the existence of a trend, seasonality, outliers).
+
+```{r}
+data %>%
+  ggplot( aes(x=DATE, y=UIGFULL)) +
+  geom_area(fill="#69b3a2", alpha=0.5) +
+  geom_line(color="#69b3a2") +
+  ylab("Underlying Inflation Gauge") + labs(title="Time Series Plot of Underlying Inflation Gauge")
+```
+
+```{r}
+data_1 <- data %>%
+  mutate(Year = lubridate::year(DATE),
+         Month = lubridate::month(DATE, label = TRUE, abbr = FALSE))
+
+ggplot(data_1, aes(x = Month, y = UIGFULL, group = Year, color = as.factor(Year))) +
+  geom_line() +
+  theme_minimal()
+```
+
+```{r}
+bplot_month <- ggplot(data_1, aes(x=Month, y= UIGFULL, fill = Month ))+
+  geom_boxplot()+
+  labs(title = "Boxplot Across Year", x = "Month", y = "Inflation")
+bplot_month
+
+```
+
+### 3. Split data as train and test (For yearly data and quarterly data 4 or 5, monthly data 12).
+
+```{r}
+train <- data[1:333,]
+test <- data[334:345,]
+
+train_ts <- ts(train[,2],frequency= 12,start = c(1995,1))
+test_ts <- ts(test[,2],frequency= 12,start = c(2022,10))
+```
+
+### 4. Make a anomaly detection and if necessary clean the series from anomalies (use anomalize, forecast (tsclean function) or AnomalyDetection packages).
+
+
+```{r}
+library(tidyverse)  # Core data manipulation and visualization libraries
+library(tidyquant)  # Used for business-ready ggplot themes
+library(anomalize)  # Identify and clean time series anomalies
+library(timetk)     # Time Series Machine Learning Features
+library(knitr)      # For kable() function: This is a very simple table generator. 
+library(tibbletime)
+library(dplyr)
+
+train_tible <- as_tibble(train)
+
+class(train_tible)
+
+train_tible %>%
+  time_decompose(UIGFULL, method = "stl", frequency = "auto", trend = "auto") %>%
+  anomalize(remainder, method = "gesd", alpha = 0.05, max_anoms = 0.2) %>%
+  plot_anomaly_decomposition()
+
+
+train_tible %>%
+  time_decompose(UIGFULL) %>%
+  anomalize(remainder, alpha = 0.05) %>%
+  time_recompose() %>%
+  plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+
+
+anomaly_dates <- train_tible %>% #  Dates with anomalies
+  time_decompose(UIGFULL) %>%
+  anomalize(remainder) %>%
+  time_recompose() %>%
+  filter(anomaly == 'Yes')
+
+train <- train %>% #  train data cleared of anomalies
+  filter(!DATE %in% anomaly_dates$DATE)
+
+head(train)
+```
+
+
+
+## 5. Box-Cox transformation analysis: If the series need any transformation, do it. If the information criterion (or log-likelihood) values are too close to each other, don't transform the data.
+
+```{r}
+library(forecast)
+
+train_ts_positive <- train_ts + 0.64839 # serideki negatif değerleri pozitif yaptım
+
+lambda <- BoxCox.lambda(train_ts_positive)
+lambda
+```
+
+
+
+
+-   Since lambda value is aproximetely 1, no need transformation.
+
+### 6. ACF, PACF plots, KPSS and ADF or PP test results for zero mean, mean and trend cases and their interpretation. For seasonal unit root, HEGY and OCSB or Canova-Hansen tests are required.
+
+```{r}
+library(gridExtra)
+acf.1 <- ggAcf(data_ts,lag.max=60)
+pacf.1 <- ggPacf(data_ts)
+gridExtra::grid.arrange(acf.1,pacf.1, nrow=1 )
+```
+
+```{r}
+library(tseries)
+kpss.test(train_ts, null = "Level") 
+```
+
+-   Since p value is less than alpha, **we reject H0** . That means we don't have enough evidence to claim that the process is stationary.
+
+-   Since we concluded that the series is not stationary, now we apply KPSS test a second time to determine which kind of trend exists in the series;
+
+```{r}
+kpss.test(train_ts, null = "Trend") 
+```
+
+-   Since p value is smaller than alpha, **we reject H0**, That means We don't have enough evidence to claim that the process has deterministic trend.
+
+```{r}
+dif_train <- diff(train_ts)
+autoplot(dif_train) 
+```
+
+```{r}
+kpss.test(dif_train, null = "Level") 
+```
+
+-   Since p value is bigger than alpha, **we can not reject H0**. That means we have stationary process.
+-   Since we concluded that the series is stationary, now we apply KPSS test a second time to determine which kind of trend exists in the series;
+
+```{r}
+kpss.test(dif_train, null = "Trend") 
+```
+
+-   Since p value is bigger than alpha, **we can not reject H0**. That means we have deterministic trend .
+
+```{r}
+pp.test(train_ts)# do not reject H0 (non-stationary)
+pp.test(dif_train) # reject H0 (stationary)
+```
+
+-   We obtained the results of the kpss test and pp test similarly.
+
+```{r}
+adfTest(train_ts, lags=2, type="c") #reject H0 , accept H1 (stationary process)
+adfTest(train_ts, lags=2, type="ct") #reject H0 , accept H1 (deterministic trend)
+```
+
+-   The results of the ADF test differ from the KPSS and PP tests. Since I know that my series is seasonally adjusted, I prefer to rely on the KPSS test, and I have conducted subsequent analyses based on it.
+
+### 7. If there is a trend, remove it either by detrending or differencing. You may need to apply unit root tests again.
+
+-   I did not apply the HEGY test and the OCSB or Canova-Hansen tests because I know that my series is seasonally adjusted.
+
+### 8. Then, look at the time series plot of a stationary series, ACF and PACF plots, information table, ESACF.
+
+```{r}
+acf.2 <- ggAcf(dif_train, lag.max = 60)
+pacf.2 <- ggPacf(dif_train, lag.max = 60)
+gridExtra::grid.arrange(acf.2, pacf.2, nrow =1) # We can suggest ARIMA(1,0,0)
+```
+
+-   We may suggest ARIMA(1,0,0)
+
+### 9. Identify a proper ARMA or ARIMA model or SARIMA model.
+
+```{r}
+library(TSA)
+eacf(dif_train)
+```
+
+```{r}
+library(forecast)
+auto.arima(dif_train)
+armaselect(dif_train)
+```
+
+### 10. After deciding the order of the possible model (s), run MLE or conditional or uncondinitional LSE and estimate the parameters. Compare the information criteria of several models. (Note: If there is a convergence problem, you can change your estimation method).
+
+```{r}
+fit1<-Arima(train_ts ,order = c(1,1,0))
+fit1
+```
+
+```{r}
+fit2<-Arima(train_ts ,order = c(1,1,0), seasonal = c(2,0,0))
+fit2
+```
+
+```{r}
+r=resid(fit2)/sd(residuals(fit2))
+head(r)
+```
+
+### 12. Forecasting: The number of forecasts should be same as the length of your test data.
+
+```{r}
+fit1 <- ses(train_ts, alpha=0.2, initial="simple", h=12)
+fit2 <- ses(train_ts, alpha=0.6, initial="simple", h=12)
+fit3 <- ses(train_ts, h=23)
+
+summary(fit1)
+```
+
+```{r}
+autoplot(fit1,main="SES forecast") +
+  autolayer(fitted(fit1), series="alpha = 0.2") +
+  autolayer(fitted(fit2), series="alpha = 0.6") +
+  autolayer(fitted(fit3), series="alpha = 0.99") +
+  ylab("Inflation") + xlab("Year")+theme_minimal()
+```
+
+```{r}
+library(forecast)
+holt_train <- holt(train_ts, h= 12)
+autoplot(holt_train)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
